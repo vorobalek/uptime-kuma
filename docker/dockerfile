@@ -1,4 +1,10 @@
-ARG BASE_IMAGE=louislam/uptime-kuma:base2
+FROM louislam/uptime-kuma:base2-slim AS base
+ENV UPTIME_KUMA_ENABLE_EMBEDDED_MARIADB=1
+RUN apt update && \
+    apt --yes --no-install-recommends install mariadb-server && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt --yes autoremove && \
+    chown -R node:node /var/lib/mysql
 
 ############################################
 # Build in Golang
@@ -10,7 +16,7 @@ FROM louislam/uptime-kuma:builder-go AS build_healthcheck
 ############################################
 # Build in Node.js
 ############################################
-FROM louislam/uptime-kuma:base2 AS build
+FROM base AS build
 USER node
 WORKDIR /app
 
@@ -27,15 +33,14 @@ RUN mkdir ./data
 ############################################
 # ⭐ Main Image
 ############################################
-FROM $BASE_IMAGE AS release
+FROM build AS release
 WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/louislam/uptime-kuma"
 
 ENV UPTIME_KUMA_IS_CONTAINER=1
 
-# Copy app files from build layer
-COPY --chown=node:node --from=build /app /app
+COPY --chown=node:node /app /app
 
 EXPOSE 3001
 HEALTHCHECK --interval=60s --timeout=30s --start-period=180s --retries=5 CMD extra/healthcheck
@@ -60,7 +65,7 @@ USER node
 ############################################
 # Build an image for testing pr
 ############################################
-FROM louislam/uptime-kuma:base2 AS pr-test2
+FROM base AS pr-test2
 WORKDIR /app
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=1
 
@@ -89,7 +94,7 @@ CMD ["npm", "run", "start-pr-test"]
 ############################################
 # Upload the artifact to Github
 ############################################
-FROM louislam/uptime-kuma:base2 AS upload-artifact
+FROM base AS upload-artifact
 WORKDIR /
 RUN apt update && \
     apt --yes install curl file
