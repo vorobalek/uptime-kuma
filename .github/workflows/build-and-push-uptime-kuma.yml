@@ -1,0 +1,32 @@
+name: Build and Push Uptime-Kuma to Yandex Cloud CR
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Login to Yandex Cloud Container Registry
+        id: login-cr
+        uses: yc-actions/yc-cr-login@v3
+        with:
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+
+      - name: Build Docker image
+        env:
+          IMAGE_TAG: latest
+        run: |
+          IMAGE_NAME=cr.yandex/crpj1p5npsnemiijgjbr/uptime-kuma
+          docker build -f docker/dockerfile -t "$IMAGE_NAME:$IMAGE_TAG" . --pull --target release
+
+      - name: Push Docker image
+        env:
+          IMAGE_TAG: latest
+        run: |
+          IMAGE_NAME=cr.yandex/crpj1p5npsnemiijgjbr/uptime-kuma
+          docker push "$IMAGE_NAME:$IMAGE_TAG" 
