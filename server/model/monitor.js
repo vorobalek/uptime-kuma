@@ -160,6 +160,7 @@ class Monitor extends BeanModel {
             smtpSecurity: this.smtpSecurity,
             rabbitmqNodes: JSON.parse(this.rabbitmqNodes),
             conditions: JSON.parse(this.conditions),
+            ipFamily: this.ipFamily,
 
             // ping advanced options
             ping_numeric: this.isPingNumeric(),
@@ -180,6 +181,7 @@ class Monitor extends BeanModel {
                 oauth_client_secret: this.oauth_client_secret,
                 oauth_token_url: this.oauth_token_url,
                 oauth_scopes: this.oauth_scopes,
+                oauth_audience: this.oauth_audience,
                 oauth_auth_method: this.oauth_auth_method,
                 pushToken: this.pushToken,
                 databaseConnectionString: this.databaseConnectionString,
@@ -188,6 +190,7 @@ class Monitor extends BeanModel {
                 radiusSecret: this.radiusSecret,
                 mqttUsername: this.mqttUsername,
                 mqttPassword: this.mqttPassword,
+                mqttWebsocketPath: this.mqttWebsocketPath,
                 authWorkstation: this.authWorkstation,
                 authDomain: this.authDomain,
                 tlsCa: this.tlsCa,
@@ -426,10 +429,26 @@ class Monitor extends BeanModel {
                         }
                     }
 
+                    let agentFamily = undefined;
+                    if (this.ipFamily === "ipv4") {
+                        agentFamily = 4;
+                    }
+                    if (this.ipFamily === "ipv6") {
+                        agentFamily = 6;
+                    }
+
                     const httpsAgentOptions = {
                         maxCachedSessions: 0, // Use Custom agent to disable session reuse (https://github.com/nodejs/node/issues/3940)
                         rejectUnauthorized: !this.getIgnoreTls(),
                         secureOptions: crypto.constants.SSL_OP_LEGACY_SERVER_CONNECT,
+                        autoSelectFamily: true,
+                        ...(agentFamily ? { family: agentFamily } : {})
+                    };
+
+                    const httpAgentOptions = {
+                        maxCachedSessions: 0,
+                        autoSelectFamily: true,
+                        ...(agentFamily ? { family: agentFamily } : {})
                     };
 
                     log.debug("monitor", `[${this.name}] Prepare Options for axios`);
@@ -491,12 +510,17 @@ class Monitor extends BeanModel {
                         if (proxy && proxy.active) {
                             const { httpAgent, httpsAgent } = Proxy.createAgents(proxy, {
                                 httpsAgentOptions: httpsAgentOptions,
+                                httpAgentOptions: httpAgentOptions,
                             });
 
                             options.proxy = false;
                             options.httpAgent = httpAgent;
                             options.httpsAgent = httpsAgent;
                         }
+                    }
+
+                    if (!options.httpAgent) {
+                        options.httpAgent = new http.Agent(httpAgentOptions);
                     }
 
                     if (!options.httpsAgent) {
@@ -724,7 +748,7 @@ class Monitor extends BeanModel {
                     } else if (dockerHost._dockerType === "tcp") {
                         options.baseURL = DockerHost.patchDockerURL(dockerHost._dockerDaemon);
                         options.httpsAgent = new https.Agent(
-                            DockerHost.getHttpsAgentOptions(dockerHost._dockerType, options.baseURL)
+                            await DockerHost.getHttpsAgentOptions(dockerHost._dockerType, options.baseURL)
                         );
                     }
 
@@ -1291,7 +1315,7 @@ class Monitor extends BeanModel {
     /**
      * Send a notification about a monitor
      * @param {boolean} isFirstBeat Is this beat the first of this monitor?
-     * @param {Monitor} monitor The monitor to send a notificaton about
+     * @param {Monitor} monitor The monitor to send a notification about
      * @param {Bean} bean Status information about monitor
      * @returns {void}
      */
@@ -1724,7 +1748,7 @@ class Monitor extends BeanModel {
      */
     async makeOidcTokenClientCredentialsRequest() {
         log.debug("monitor", `[${this.name}] The oauth access-token undefined or expired. Requesting a new token`);
-        const oAuthAccessToken = await getOidcTokenClientCredentials(this.oauth_token_url, this.oauth_client_id, this.oauth_client_secret, this.oauth_scopes, this.oauth_auth_method);
+        const oAuthAccessToken = await getOidcTokenClientCredentials(this.oauth_token_url, this.oauth_client_id, this.oauth_client_secret, this.oauth_scopes, this.oauth_audience, this.oauth_auth_method);
         if (this.oauthAccessToken?.expires_at) {
             log.debug("monitor", `[${this.name}] Obtained oauth access-token. Expires at ${new Date(this.oauthAccessToken?.expires_at * 1000)}`);
         } else {
