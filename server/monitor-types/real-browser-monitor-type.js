@@ -259,6 +259,7 @@ class RealBrowserMonitorType extends MonitorType {
             path: path.join(Database.screenshotDir, filename),
         });
 
+        await page.close();
         await context.close();
 
         if (res.status() >= 200 && res.status() < 400) {
