@@ -92,6 +92,10 @@ export default {
     },
     computed: {
 
+        DOWN() { return DOWN; },
+        PENDING() { return PENDING; },
+        MAINTENANCE() { return MAINTENANCE; },
+
         /**
          * Normalized heartbeatBarDays as a number
          * @returns {number} Number of days for heartbeat bar
