@@ -222,81 +222,71 @@ exports.pingAsync = function (
  * Authentication (SASL) (defaults to {})
  * @returns {Promise<string>} Status message
  */
-exports.kafkaProducerAsync = function (brokers, topic, message, options = {}, saslOptions = {}) {
-    return new Promise((resolve, reject) => {
-        const { interval = 20, allowAutoTopicCreation = false, ssl = false, clientId = "Uptime-Kuma" } = options;
+exports.kafkaProducerAsync = async function (brokers, topic, message, options = {}, saslOptions = {}) {
+    const { interval = 20, allowAutoTopicCreation = false, ssl = false, clientId = "Uptime-Kuma", kafkaFactory } = options;
 
-        let connectedToKafka = false;
+    const deadlineAt = Date.now() + interval * 1000 * 0.8;
+    const remainingMs = () => Math.max(0, deadlineAt - Date.now());
 
-        const timeoutID = setTimeout(() => {
-            log.debug("kafkaProducer", "KafkaProducer timeout triggered");
-            connectedToKafka = true;
-            reject(new Error("Timeout"));
-        }, interval * 1000 * 0.8);
+    if (saslOptions.mechanism === "None") {
+        saslOptions = undefined;
+    }
 
-        if (saslOptions.mechanism === "None") {
-            saslOptions = undefined;
+    const attempts = Math.max(1, Array.isArray(brokers) ? brokers.length : 1);
+    let lastError = null;
+
+    for (let i = 0; i < attempts; i++) {
+        if (remainingMs() <= 0) {
+            throw new Error("Timeout");
         }
 
-        let client = new Kafka({
-            brokers: brokers,
-            clientId: clientId,
+        // Rotate brokers list so each broker gets a chance to be the first seed
+        const rotatedBrokers = Array.isArray(brokers)
+            ? [ ...brokers.slice(i), ...brokers.slice(0, i) ]
+            : brokers;
+
+        const connectTimeout = Math.min(5000, Math.max(500, remainingMs()));
+
+        const kafkaConfig = {
+            brokers: rotatedBrokers,
+            clientId,
             sasl: saslOptions,
+            ssl,
+            connectionTimeout: connectTimeout,
+            requestTimeout: connectTimeout,
             retry: {
+                // Let us control the fallback order manually, fail fast per attempt
                 retries: 0,
             },
-            ssl: ssl,
+        };
+
+        // Allow injection for tests
+        const client = kafkaFactory ? kafkaFactory(kafkaConfig) : new Kafka(kafkaConfig);
+        const producer = client.producer({
+            allowAutoTopicCreation,
+            retry: { retries: 0 },
         });
 
-        let producer = client.producer({
-            allowAutoTopicCreation: allowAutoTopicCreation,
-            retry: {
-                retries: 0,
-            }
-        });
+        try {
+            await producer.connect();
+            await producer.send({
+                topic,
+                messages: [ { value: message } ],
+            });
+            try { await producer.disconnect(); } catch (_) {}
+            return "Message sent successfully";
+        } catch (e) {
+            lastError = e;
+            try { await producer.disconnect(); } catch (_) {}
+            // Try next rotated broker
+        }
+    }
 
-        producer.connect().then(
-            () => {
-                producer.send({
-                    topic: topic,
-                    messages: [{
-                        value: message,
-                    }],
-                }).then((_) => {
-                    resolve("Message sent successfully");
-                }).catch((e) => {
-                    connectedToKafka = true;
-                    producer.disconnect();
-                    clearTimeout(timeoutID);
-                    reject(new Error("Error sending message: " + e.message));
-                }).finally(() => {
-                    connectedToKafka = true;
-                    clearTimeout(timeoutID);
-                });
-            }
-        ).catch(
-            (e) => {
-                connectedToKafka = true;
-                producer.disconnect();
-                clearTimeout(timeoutID);
-                reject(new Error("Error in producer connection: " + e.message));
-            }
-        );
+    if (remainingMs() <= 0) {
+        throw new Error("Timeout");
+    }
 
-        producer.on("producer.network.request_timeout", (_) => {
-            if (!connectedToKafka) {
-                clearTimeout(timeoutID);
-                reject(new Error("producer.network.request_timeout"));
-            }
-        });
-
-        producer.on("producer.disconnect", (_) => {
-            if (!connectedToKafka) {
-                clearTimeout(timeoutID);
-                reject(new Error("producer.disconnect"));
-            }
-        });
-    });
+    throw new Error("Failed to connect to any Kafka broker: " + (lastError?.message || "Unknown error"));
 };
 
 /**
